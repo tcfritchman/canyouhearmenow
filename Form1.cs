@@ -110,8 +110,7 @@ namespace canyouhearmenow
         private void playButton_Click(object sender, EventArgs e)
         {
             waveReader = new NAudio.Wave.WaveFileReader(outputFilePath);
-        
-            output = new NAudio.Wave.DirectSoundOut();
+            output = new NAudio.Wave.DirectSoundOut(100);
             output.Init(new NAudio.Wave.WaveChannel32(waveReader));
             output.Play();
             playButton.Enabled = false;
