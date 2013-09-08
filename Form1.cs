@@ -17,181 +17,125 @@ namespace canyouhearmenow
 {
     public partial class Form1 : Form
     {
-        // recording
-        private IWaveIn waveIn;
-        private WaveFileWriter writer;
-        private string outputFilename;
-        private readonly string outputFolder;
 
-        // playback
-        private IWavePlayer wavePlayer;
-        private AudioFileReader file;
-        private string fileName;
+        private string outputFolder = Path.Combine(Path.GetTempPath(), "canyouhearmenow");
+        private string outputFilename;
+        private string outputFilePath;
+        // TODO: Come up with better means for checking if device exists
+        static int deviceNumber = -1;
+        static int sampleRate = 44100;
+        static int inChannels = NAudio.Wave.WaveIn.GetCapabilities(deviceNumber).Channels;
+
+        string state = "stop";
+
+        public int sampleLocation = 0;
+        
+        
 
         public Form1()
         {
             InitializeComponent();
             outputFolder = Path.Combine(Path.GetTempPath(), "NAudioDemo");
             Directory.CreateDirectory(outputFolder);
-            this.timer1.Interval = 250;
-            this.timer1.Tick += new EventHandler(timer1_Tick);
         }
 
-        private static string FormatTimeSpan(TimeSpan ts)
-        {
-            return string.Format("{0:D2}:{1:D2}", (int)ts.TotalMinutes, ts.Seconds);
-        }
+        NAudio.Wave.WaveIn sourceStream = null;
+        NAudio.Wave.DirectSoundOut waveOut = null;
+        NAudio.Wave.WaveFileWriter waveWriter = null;
+        NAudio.Wave.WaveFileReader waveReader = null;
+        NAudio.Wave.DirectSoundOut output = null;
 
-        void timer1_Tick(object sender, EventArgs e)
+        // Returns a list of device capabilities
+        private List<NAudio.Wave.WaveInCapabilities> getDevices()
         {
-            if (file != null)
+            List<NAudio.Wave.WaveInCapabilities> sources = new List<NAudio.Wave.WaveInCapabilities>();
+
+            for (int i = -1; i < NAudio.Wave.WaveIn.DeviceCount; i++)
             {
-                labelCurrentTime.Text = FormatTimeSpan(file.CurrentTime);
+                sources.Add(NAudio.Wave.WaveIn.GetCapabilities(i));
             }
+            return sources;
         }
-
-        void SimplePlaybackPanel_Disposed(object sender, EventArgs e)
-        {
-            CleanUp();
-        }
-
-        
-
-
 
         private void recordButton_Click(object sender, EventArgs e)
         {
-            if (waveIn == null)
-            {
-                outputFilename = String.Format("NAudioDemo {0:yyy-MM-dd HH-mm-ss}.wav", DateTime.Now);
-                waveIn = new WaveIn();
-                waveIn.WaveFormat = new WaveFormat(44100, 1);
-                writer = new WaveFileWriter(Path.Combine(outputFolder, outputFilename), waveIn.WaveFormat);
+            state = "record";
+            recordButton.Enabled = false;
+            outputFilename = String.Format("Clip {0:yyy-MM-dd HH-mm-ss}.wav", DateTime.Now);
+            outputFilePath = Path.Combine(outputFolder, outputFilename);
+            Debug.Print(outputFilePath);
+            sourceStream = new NAudio.Wave.WaveIn();
+            sourceStream.DeviceNumber = deviceNumber;
+            sourceStream.WaveFormat = new NAudio.Wave.WaveFormat(sampleRate, inChannels);
 
-                waveIn.DataAvailable += OnDataAvailable;
-                waveIn.RecordingStopped += OnRecordingStopped;
-                waveIn.StartRecording();
-                recordButton.Enabled = false;
-            }
+            sourceStream.DataAvailable += new EventHandler<NAudio.Wave.WaveInEventArgs>(sourceStream_DataAvailable);
+            waveWriter = new NAudio.Wave.WaveFileWriter(outputFilePath, sourceStream.WaveFormat);
+
+            sourceStream.StartRecording();
         }
 
-        private void BeginPlayback(string filename)
+        private void sourceStream_DataAvailable(object sender, NAudio.Wave.WaveInEventArgs e)
         {
-            Debug.Assert(this.wavePlayer == null);
-            this.wavePlayer = CreateWavePlayer();
-            this.file = new AudioFileReader(Path.Combine(outputFolder, filename));
-            this.file.Volume = 1.0F;
-            Debug.Print(Path.Combine(outputFolder, filename));
-            this.wavePlayer.Init(file);
-            this.wavePlayer.PlaybackStopped += wavePlayer_PlaybackStopped;
-            this.wavePlayer.Play();
-            timer1.Enabled = true; // for updating current time
+            if (waveWriter == null) return;
+
+            waveWriter.Write(e.Buffer, 0, e.BytesRecorded);
+            sampleLocation += e.BytesRecorded / 4;
+            labelCurrentTime.Text = ((double)sampleLocation / (double)sampleRate).ToString();
+            waveWriter.Flush();
         }
-
-        private IWavePlayer CreateWavePlayer()
-        {
-            // WaveOut window callbacks
-            return new WaveOutEvent();
-        }
-
-        void wavePlayer_PlaybackStopped(object sender, StoppedEventArgs e)
-        {
-            // we want to be always on the GUI thread and be able to change GUI components
-            Debug.Assert(!this.InvokeRequired, "PlaybackStopped on wrong thread");
-            // we want it to be safe to clean up input stream and playback device in the handler for PlaybackStopped
-            CleanUp();
-            //EnableButtons(false);
-            timer1.Enabled = false;
-            labelCurrentTime.Text = "00:00";
-            if (e.Exception != null)
-            {
-                MessageBox.Show(String.Format("Playback Stopped due to an error {0}", e.Exception.Message));
-            }
-        }
-
-        void OnRecordingStopped(object sender, StoppedEventArgs e)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new EventHandler<StoppedEventArgs>(OnRecordingStopped), sender, e);
-            }
-            else
-            {
-                Cleanup();
-                recordButton.Enabled = true;
-                if (e.Exception != null)
-                {
-                    MessageBox.Show(String.Format("A problem was encountered during recording {0}",
-                                                  e.Exception.Message));
-                }
-            }
-        }
-
-        private void Cleanup()
-        {
-            if (waveIn != null) // working around problem with double raising of RecordingStopped
-            {
-                waveIn.Dispose();
-                waveIn = null;
-            }
-            if (writer != null)
-            {
-                writer.Close();
-                writer = null;
-            }
-        }
-
-        private void CleanUp()
-        {
-            if (this.file != null)
-            {
-                this.file.Dispose();
-                this.file = null;
-            }
-            if (this.wavePlayer != null)
-            {
-                this.wavePlayer.Dispose();
-                this.wavePlayer = null;
-            }
-        }
-
-
-        void OnDataAvailable(object sender, WaveInEventArgs e)
-        {
-            if (this.InvokeRequired)
-            {
-                //Debug.WriteLine("Data Available");
-                this.BeginInvoke(new EventHandler<WaveInEventArgs>(OnDataAvailable), sender, e);
-            }
-            else
-            {
-                //Debug.WriteLine("Flushing Data Available");
-                writer.Write(e.Buffer, 0, e.BytesRecorded);
-                int secondsRecorded = (int)(writer.Length / writer.WaveFormat.AverageBytesPerSecond);
-            
-            }
-        }
-
-        void StopRecording()
-        {
-            Debug.WriteLine("StopRecording");
-            waveIn.StopRecording();
-        }
-
         private void stopButton_Click(object sender, EventArgs e)
         {
-            if (waveIn != null)
+            state = "stop";
+            playButton.Enabled = true;
+            recordButton.Enabled = true;
+            if (waveOut != null)
             {
-                StopRecording();
+                waveOut.Stop();
+                waveOut.Dispose();
+                waveOut = null;
+            }
+            if (sourceStream != null)
+            {
+                sourceStream.StopRecording();
+                sourceStream.Dispose();
+                sourceStream = null;
+            }
+            if (waveWriter != null)
+            {
+                waveWriter.Dispose();
+                waveWriter = null;
             }
         }
 
         private void playButton_Click(object sender, EventArgs e)
         {
-            if (fileName == null) fileName = outputFilename;
-            if (fileName != null)
+            waveReader = new NAudio.Wave.WaveFileReader(outputFilePath);
+        
+            output = new NAudio.Wave.DirectSoundOut();
+            output.Init(new NAudio.Wave.WaveChannel32(waveReader));
+            output.Play();
+            playButton.Enabled = false;
+            
+        }
+
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (waveOut != null)
             {
-                BeginPlayback(fileName);
+                waveOut.Stop();
+                waveOut.Dispose();
+                waveOut = null;
+            }
+            if (sourceStream != null)
+            {
+                sourceStream.StopRecording();
+                sourceStream.Dispose();
+                sourceStream = null;
+            }
+            if (waveWriter != null)
+            {
+                waveWriter.Dispose();
+                waveWriter = null;
             }
         }
 
